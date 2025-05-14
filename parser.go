@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+const tokenDelimiter = "."
+
 type Parser struct {
 	// If populated, only these methods will be considered valid.
 	//
@@ -122,9 +124,10 @@ func (p *Parser) ParseWithClaims(tokenString string, claims Claims, keyFunc Keyf
 // It's only ever useful in cases where you know the signature is valid (because it has
 // been checked previously in the stack) and you want to extract values from it.
 func (p *Parser) ParseUnverified(tokenString string, claims Claims) (token *Token, parts []string, err error) {
-	parts = strings.Split(tokenString, ".")
-	if len(parts) != 3 {
-		return nil, parts, NewValidationError("token contains an invalid number of segments", ValidationErrorMalformed)
+	var ok bool
+	parts, ok = splitToken(tokenString)
+	if !ok {
+		return nil, nil, NewValidationError("token contains an invalid number of segments", ValidationErrorMalformed)
 	}
 
 	token = &Token{Raw: tokenString}
@@ -173,4 +176,40 @@ func (p *Parser) ParseUnverified(tokenString string, claims Claims) (token *Toke
 	}
 
 	return token, parts, nil
+}
+
+// cut splits s around the first instance of sep, returning the text before and after sep.
+// The found result reports whether sep appears in s.
+func cut(s, sep string) (before, after string, found bool) {
+	if i := strings.Index(s, sep); i >= 0 {
+		return s[:i], s[i+len(sep):], true
+	}
+	return s, "", false
+}
+
+// splitToken splits a token string into three parts: header, claims, and signature. It will only
+// return true if the token contains exactly two delimiters and three parts. In all other cases, it
+// will return nil parts and false.
+func splitToken(token string) ([]string, bool) {
+	parts := make([]string, 3)
+	header, remain, ok := cut(token, tokenDelimiter)
+	if !ok {
+		return nil, false
+	}
+	parts[0] = header
+	claims, remain, ok := cut(remain, tokenDelimiter)
+	if !ok {
+		return nil, false
+	}
+	parts[1] = claims
+	// One more cut to ensure the signature is the last part of the token and there are no more
+	// delimiters. This avoids an issue where malicious input could contain additional delimiters
+	// causing unecessary overhead parsing tokens.
+	signature, _, unexpected := cut(remain, tokenDelimiter)
+	if unexpected {
+		return nil, false
+	}
+	parts[2] = signature
+
+	return parts, true
 }
